@@ -1,13 +1,10 @@
 // Web Worker for In-Browser Python Execution with Pyodide
 // Pinned CDN version (v0.26.4 - stable, production-grade release)
-const PYODIDE_CDN_JS = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js';
+const PYODIDE_CDN_MJS = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.mjs';
 const PYODIDE_INDEX_URL = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/';
 
 const MAX_OUTPUT_BYTES = 64 * 1024; // 64 KB cap
 const MAX_CODE_CHARS = 10000;       // 10,000 characters cap
-
-declare const importScripts: (...urls: string[]) => void;
-declare const loadPyodide: (config: { indexURL: string }) => Promise<any>;
 
 let pyodideInstance: any = null;
 let initPromise: Promise<any> | null = null;
@@ -18,21 +15,23 @@ async function getPyodide(): Promise<any> {
 
   initPromise = (async () => {
     try {
-      importScripts(PYODIDE_CDN_JS);
+      // Dynamic ES module import from CDN for module web worker
+      const pyodideModule: any = await import(/* @vite-ignore */ PYODIDE_CDN_MJS);
+      const loadPyodide = pyodideModule?.loadPyodide || pyodideModule?.default?.loadPyodide;
+
+      if (typeof loadPyodide !== 'function') {
+        throw new Error('Pyodide load function is not available in imported module.');
+      }
+
+      const py = await loadPyodide({
+        indexURL: PYODIDE_INDEX_URL
+      });
+
+      pyodideInstance = py;
+      return py;
     } catch (err: any) {
-      throw new Error(`Failed to load Pyodide script from CDN: ${err?.message || err}`);
+      throw new Error(`Failed to load Pyodide module from CDN: ${err?.message || err}`);
     }
-
-    if (typeof loadPyodide !== 'function') {
-      throw new Error('Pyodide load function is not available in worker context.');
-    }
-
-    const py = await loadPyodide({
-      indexURL: PYODIDE_INDEX_URL
-    });
-
-    pyodideInstance = py;
-    return py;
   })();
 
   return initPromise;
@@ -203,7 +202,27 @@ __final_stderr = __stderr_capture.getvalue()
             // Normalise comparisons for common python output differences
             const cleanActual = actualStr.trim().replace(/^['"]|['"]$/g, '');
             const cleanExpected = expected.trim().replace(/^['"]|['"]$/g, '');
-            const passed = cleanActual === cleanExpected || actualStr.trim() === expected;
+            let passed = cleanActual === cleanExpected || actualStr.trim() === expected;
+
+            // Numeric equivalence (e.g. JS float representation '5' vs Python '5.0')
+            if (!passed && cleanActual !== '' && cleanExpected !== '') {
+              const numActual = Number(cleanActual);
+              const numExpected = Number(cleanExpected);
+              if (!Number.isNaN(numActual) && !Number.isNaN(numExpected)) {
+                passed = numActual === numExpected;
+              }
+            }
+
+            // JSON equivalence (e.g. dictionaries / lists with single vs double quotes)
+            if (!passed) {
+              try {
+                const jsonActual = JSON.parse(cleanActual.replace(/'/g, '"'));
+                const jsonExpected = JSON.parse(cleanExpected.replace(/'/g, '"'));
+                passed = JSON.stringify(jsonActual) === JSON.stringify(jsonExpected);
+              } catch {
+                // Ignore parse errors
+              }
+            }
 
             if (passed) passedCount++;
 
