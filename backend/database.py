@@ -23,7 +23,8 @@ def normalize_database_url(url: str = None) -> str:
     if raw_url.startswith("postgres://"):
         raw_url = raw_url.replace("postgres://", "postgresql://", 1)
 
-    if raw_url.startswith("postgresql://") and "sslmode=" not in raw_url:
+    is_pg = raw_url.startswith("postgresql://") or raw_url.startswith("postgresql+")
+    if is_pg and "sslmode=" not in raw_url:
         # Remote hosts (e.g. *.neon.tech) require sslmode=require
         if "localhost" not in raw_url and "127.0.0.1" not in raw_url:
             separator = "&" if "?" in raw_url else "?"
